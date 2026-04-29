@@ -18,21 +18,30 @@ function statusBadge(estado: string) {
 }
 
 export default async function DashboardPage() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  // TEMP: bypass auth — usa email interno FE para ver todos los socios.
+  const bypass = process.env.BYPASS_AUTH === "1";
 
-  const partner = resolvePartner(user.email ?? "");
+  let userEmail: string | null = null;
+  if (bypass) {
+    userEmail = "valentina.galiano@feconsulting.cl";
+  } else {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) redirect("/login");
+    userEmail = user.email ?? null;
+  }
+
+  const partner = resolvePartner(userEmail ?? "");
 
   if (!partner) {
     return (
-      <Shell email={user.email}>
+      <Shell email={userEmail}>
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-800">
           <h2 className="text-lg font-semibold">Tu cuenta aún no está asociada a un socio</h2>
           <p className="mt-2 text-sm">
-            Contacta a tu ejecutivo FE para que vincule tu email <strong>{user.email}</strong> a tu
+            Contacta a tu ejecutivo FE para que vincule tu email <strong>{userEmail}</strong> a tu
             socio.
           </p>
         </div>
@@ -62,7 +71,7 @@ export default async function DashboardPage() {
   }
 
   return (
-    <Shell email={user.email}>
+    <Shell email={userEmail}>
       <div className="mb-6 flex items-end justify-between">
         <div>
           <p className="text-sm font-medium text-brand-600">Socio</p>
