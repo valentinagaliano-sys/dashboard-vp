@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { fetchSheet } from "@/lib/sheets";
-import { resolvePartner, filterRowsForPartner } from "@/lib/partner-mapping";
+import { fetchAggregate } from "@/lib/sheets";
+import { resolveUser, filterGanttForUser, filterSummariesForUser } from "@/lib/partner-mapping";
 
 export const dynamic = "force-dynamic";
 
@@ -10,13 +10,10 @@ export async function GET(request: Request) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  if (!user) {
-    return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-  }
-
-  const partner = resolvePartner(user.email ?? "");
-  if (!partner) {
+  const resolved = resolveUser(user.email);
+  if (!resolved) {
     return NextResponse.json(
       { error: "Tu email no está autorizado. Contacta a tu ejecutivo FE." },
       { status: 403 }
@@ -26,14 +23,14 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const force = url.searchParams.get("refresh") === "1";
-    const sheet = await fetchSheet(force);
-    const filtered = filterRowsForPartner(sheet.rows, partner);
-
+    const agg = await fetchAggregate(force);
     return NextResponse.json({
-      partner,
-      weeks: sheet.weeks,
-      rows: filtered,
-      fetchedAt: sheet.fetchedAt,
+      role: resolved.role,
+      partner: resolved.partner,
+      weeks: agg.weeks,
+      gantt: filterGanttForUser(agg.ganttRows, resolved),
+      summaries: filterSummariesForUser(agg.summaries, resolved),
+      fetchedAt: agg.fetchedAt,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";

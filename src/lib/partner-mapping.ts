@@ -1,18 +1,16 @@
-import type { SheetRow } from "@/lib/sheets";
+import type { GanttRow, ResolvedUser, SolutionSummary } from "./types";
+import { canonicalPartner } from "./solutions";
 
 /**
- * Mapeo de email -> socio.
+ * Resolución email → rol + socio.
  *
- * Dos formas de mapear:
- *  1. Por dominio (ej: "@bci.cl" -> "BCI")
- *  2. Por email exacto (ej: "vendor@gmail.com" -> "Walmart")
- *
- * Internamente: SIEMPRE se llama a resolvePartner(email) que primero busca
- * el email exacto y luego el dominio.
- *
- * Los nombres de socio aquí DEBEN coincidir exactamente (case-insensitive)
- * con los valores de la columna "Socio" del Google Sheet.
+ * - Administrador: equipo FE Consulting (@feconsulting.cl) + directores del
+ *   proyecto BCI (@bci.cl). Ven todo.
+ * - Empresa: el resto de los socios. Ven sólo sus soluciones.
  */
+
+const FE_INTERNAL_DOMAINS = new Set(["feconsulting.cl"]);
+const DIRECTOR_DOMAINS = new Set(["bci.cl"]);
 
 const DOMAIN_TO_PARTNER: Record<string, string> = {
   "bci.cl": "BCI",
@@ -24,36 +22,64 @@ const DOMAIN_TO_PARTNER: Record<string, string> = {
   "microsoft.com": "Microsoft",
   "cchc.cl": "OTIC CChC",
   "oticcchc.cl": "OTIC CChC",
-  "uc.cl": "EAUC",
-  "eclass.cl": "EAUC",
-  // Agrega aquí los dominios de Nicolas Inc cuando corresponda:
-  // "nicolasinc.com": "Nicolas Inc",
+  "uc.cl": "EAUC – PUC",
+  "eclass.cl": "EAUC – PUC",
+  "multigremial.cl": "Multigremial Nacional",
 };
 
 const EMAIL_TO_PARTNER: Record<string, string> = {
   // Excepciones por usuario individual cuando el dominio no aplica.
-  // "ejemplo@gmail.com": "Walmart",
 };
 
-// Emails internos del equipo FE: ven todos los socios.
-const FE_INTERNAL_DOMAINS = new Set(["feconsulting.cl"]);
-
-export function resolvePartner(email: string): string | "ALL" | null {
+export function resolveUser(email: string | null | undefined): ResolvedUser | null {
+  if (!email) return null;
   const normalized = email.trim().toLowerCase();
   if (!normalized) return null;
-
-  // Equipo interno: acceso total
   const domain = normalized.split("@")[1] ?? "";
-  if (FE_INTERNAL_DOMAINS.has(domain)) return "ALL";
 
-  if (EMAIL_TO_PARTNER[normalized]) return EMAIL_TO_PARTNER[normalized];
-  if (DOMAIN_TO_PARTNER[domain]) return DOMAIN_TO_PARTNER[domain];
+  if (FE_INTERNAL_DOMAINS.has(domain)) {
+    return {
+      role: "admin",
+      partner: null,
+      label: "Administrador",
+      subLabel: "FE Consulting",
+    };
+  }
+  if (DIRECTOR_DOMAINS.has(domain)) {
+    const partner = canonicalPartner(DOMAIN_TO_PARTNER[domain]) ?? "BCI";
+    return {
+      role: "admin",
+      partner,
+      label: "Administrador",
+      subLabel: `Director · ${partner}`,
+    };
+  }
 
-  return null;
+  const partnerName = EMAIL_TO_PARTNER[normalized] ?? DOMAIN_TO_PARTNER[domain];
+  if (!partnerName) return null;
+  const canonical = canonicalPartner(partnerName) ?? partnerName;
+  return {
+    role: "partner",
+    partner: canonical,
+    label: "Empresa",
+    subLabel: canonical,
+  };
 }
 
-export function filterRowsForPartner(rows: SheetRow[], partner: string | "ALL"): SheetRow[] {
-  if (partner === "ALL") return rows;
-  const target = partner.trim().toLowerCase();
-  return rows.filter((r) => r.socio.trim().toLowerCase() === target);
+export function filterGanttForUser(rows: GanttRow[], user: ResolvedUser): GanttRow[] {
+  if (user.role !== "partner" || !user.partner) return rows;
+  const target = user.partner.trim().toLowerCase();
+  return rows.filter((r) => {
+    const candidate = canonicalPartner(r.socio) ?? r.socio;
+    return candidate.trim().toLowerCase() === target;
+  });
+}
+
+export function filterSummariesForUser(
+  summaries: SolutionSummary[],
+  user: ResolvedUser
+): SolutionSummary[] {
+  if (user.role !== "partner" || !user.partner) return summaries;
+  const target = user.partner.trim().toLowerCase();
+  return summaries.filter((s) => s.socio.trim().toLowerCase() === target);
 }
