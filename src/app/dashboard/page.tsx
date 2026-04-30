@@ -182,7 +182,7 @@ export default async function DashboardPage() {
       {/* Gantt detallado — todos los roles, colapsable */}
       {ganttRows.length > 0 && (
         <section>
-          <details className="group">
+          <details className="group" open>
             <summary className="mb-3 cursor-pointer list-none">
               <h2 className="inline-flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-gray-700 hover:text-gray-900">
                 <span className="transition-transform group-open:rotate-90">▶</span>
