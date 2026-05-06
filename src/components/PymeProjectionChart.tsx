@@ -14,9 +14,7 @@ import {
   YAxis,
 } from "recharts";
 
-const QUARTERS = ["Q1 2026", "Q2 2026", "Q3 2026", "Q4 2026"];
-// Acumulado al cierre de cada trimestre, ramp-up estándar.
-const QUARTER_RAMP = [0.05, 0.25, 0.6, 1.0];
+const MONTHS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
 const PALETTE = [
   "#2f48b3", "#3a7bd5", "#10b981", "#f59e0b", "#ef4444",
@@ -29,13 +27,9 @@ export type ChartSolution = {
   label: string;
   socio: string;
   pymeTarget: number;
-  actualByQuarter?: number[]; // datos reales acumulados (cuando existan)
-  unit?: string;
+  /** Acumulado mensual reportado (null en meses sin dato). */
+  monthly: (number | null)[];
 };
-
-function currentQuarterIndex(d: Date): number {
-  return Math.floor(d.getMonth() / 3);
-}
 
 export function PymeProjectionChart({
   solutions,
@@ -46,32 +40,78 @@ export function PymeProjectionChart({
 }) {
   if (solutions.length === 0) return null;
 
-  const todayQ = currentQuarterIndex(today);
+  const todayMonth = today.getMonth(); // 0..11
 
-  // Data por trimestre: para cada solución dos series — `<slug>__real` y `<slug>__proj`.
-  // En trimestres ya cerrados (qi < todayQ) y el actual (qi === todayQ) → toda la cifra va a real.
-  // En trimestres futuros (qi > todayQ) → toda la cifra va a proyectado.
-  // Cuando no hay actuals reportados, real = 0 (las barras pasadas se ven vacías, intencional).
-  const rows = QUARTERS.map((q, qi) => {
-    const factor = QUARTER_RAMP[qi];
-    const isProj = qi > todayQ;
-    const row: Record<string, number | string> = { quarter: q };
-    let metaAcum = 0;
-    for (const s of solutions) {
-      const target = Math.round(s.pymeTarget * factor);
-      const actual = s.actualByQuarter?.[qi] ?? 0;
-      row[`${s.slug}__real`] = isProj ? 0 : actual;
-      row[`${s.slug}__proj`] = isProj ? target : 0;
-      metaAcum += target;
+  // Para cada solución calculamos:
+  //  - real[m]: acumulado reportado en el mes m (null si no hay)
+  //  - proj[m]: proyección lineal entre el último valor reportado (o 0) y la meta a Dic
+  // En el chart usamos dos series por solución (`__real` y `__proj`) que se apilan.
+  // En cada mes la solución contribuye con UNA de las dos (la otra es 0).
+  function buildSeries(s: ChartSolution): { real: number[]; proj: number[] } {
+    const real: number[] = Array(12).fill(0);
+    const proj: number[] = Array(12).fill(0);
+
+    // Encuentra último mes con valor reportado
+    let lastReportedMonth = -1;
+    let lastReportedValue = 0;
+    for (let m = 0; m < 12; m++) {
+      if (s.monthly[m] != null) {
+        lastReportedMonth = m;
+        lastReportedValue = s.monthly[m] as number;
+      }
     }
-    row["__metaTotal"] = metaAcum;
+
+    for (let m = 0; m < 12; m++) {
+      const v = s.monthly[m];
+      if (v != null) {
+        real[m] = v;
+        continue;
+      }
+      // Sin dato: si está antes del último reportado, mantenemos el valor anterior
+      // (curva monotónica acumulada). Si está después, proyectamos linealmente
+      // entre lastReportedValue (mes lastReportedMonth) y meta (a Dic = mes 11).
+      if (m < lastReportedMonth) {
+        // Antes del primer reporte: 0
+        real[m] = 0;
+      } else if (m === lastReportedMonth) {
+        real[m] = lastReportedValue;
+      } else {
+        // Proyección lineal hacia la meta
+        const startMonth = lastReportedMonth >= 0 ? lastReportedMonth : -1;
+        const startVal = lastReportedMonth >= 0 ? lastReportedValue : 0;
+        const remainingMonths = 11 - startMonth;
+        if (remainingMonths <= 0) {
+          proj[m] = s.pymeTarget;
+        } else {
+          const step = (s.pymeTarget - startVal) / remainingMonths;
+          proj[m] = Math.max(0, Math.round(startVal + step * (m - startMonth)));
+        }
+      }
+    }
+    return { real, proj };
+  }
+
+  const series = solutions.map(buildSeries);
+
+  // Construir filas para Recharts
+  const rows = MONTHS.map((label, m) => {
+    const row: Record<string, number | string> = { month: label };
+    let metaTotal = 0;
+    for (let i = 0; i < solutions.length; i++) {
+      row[`${solutions[i].slug}__real`] = series[i].real[m];
+      row[`${solutions[i].slug}__proj`] = series[i].proj[m];
+      metaTotal += solutions[i].pymeTarget;
+    }
+    row["__metaTotal"] = metaTotal;
     return row;
   });
 
   const totalMeta = solutions.reduce((acc, s) => acc + s.pymeTarget, 0);
-  const todayQLabel = QUARTERS[todayQ];
-  const projStartLabel = QUARTERS[Math.min(todayQ + 1, QUARTERS.length - 1)];
-  const hasProjBand = todayQ < QUARTERS.length - 1;
+  const todayLabel = MONTHS[todayMonth];
+  const projStartLabel = MONTHS[Math.min(todayMonth + 1, 11)];
+  const hasProjBand = todayMonth < 11;
+  const reportedMonths = solutions.flatMap((s) => s.monthly.map((v, i) => (v != null ? i : -1))).filter((m) => m >= 0);
+  const lastReported = reportedMonths.length > 0 ? Math.max(...reportedMonths) : -1;
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -81,9 +121,9 @@ export function PymeProjectionChart({
             Adquisición de PYMEs · 2026
           </h3>
           <p className="mt-1 text-xs text-gray-500">
-            Stacked bars por solución. Color sólido = real (acumulado reportado), patrón rayado =
-            proyección (ramp-up estándar). Línea = meta total ({totalMeta.toLocaleString("es-CL")}{" "}
-            PYMEs al cierre de Q4).
+            Acumulado mensual por solución (apilado). Color sólido = reportado en KPIs_PYMEs;
+            patrón rayado = proyección lineal hacia meta. Línea = meta total ({totalMeta.toLocaleString("es-CL")}{" "}
+            PYMEs).
           </p>
         </div>
         <div className="flex items-center gap-2 text-[11px]">
@@ -94,7 +134,6 @@ export function PymeProjectionChart({
         </div>
       </div>
 
-      {/* SVG patterns (hatch) para barras proyectadas */}
       <svg width="0" height="0" style={{ position: "absolute" }}>
         <defs>
           {solutions.map((s, i) => {
@@ -120,7 +159,7 @@ export function PymeProjectionChart({
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={rows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-            <XAxis dataKey="quarter" tick={{ fill: "#64748b", fontSize: 12 }} />
+            <XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 12 }} />
             <YAxis
               tick={{ fill: "#64748b", fontSize: 12 }}
               tickFormatter={(v: number) =>
@@ -128,20 +167,18 @@ export function PymeProjectionChart({
               }
             />
 
-            {/* Banda de fondo de la zona proyectada */}
-            {hasProjBand && (
+            {hasProjBand && lastReported >= 0 && lastReported < 11 && (
               <ReferenceArea
-                x1={projStartLabel}
-                x2={QUARTERS[QUARTERS.length - 1]}
+                x1={MONTHS[lastReported + 1]}
+                x2={MONTHS[11]}
                 fill="#fef3c7"
-                fillOpacity={0.35}
+                fillOpacity={0.3}
                 ifOverflow="extendDomain"
               />
             )}
 
-            {/* Línea vertical "hoy" */}
             <ReferenceLine
-              x={todayQLabel}
+              x={todayLabel}
               stroke="#dc2626"
               strokeDasharray="4 3"
               label={{
@@ -169,7 +206,6 @@ export function PymeProjectionChart({
 
             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
 
-            {/* Real (color sólido) — únicas que aparecen en leyenda */}
             {solutions.map((s, i) => (
               <Bar
                 key={`${s.slug}-real`}
@@ -180,7 +216,6 @@ export function PymeProjectionChart({
                 isAnimationActive={false}
               />
             ))}
-            {/* Proyectado (patrón rayado) — ocultas en leyenda */}
             {solutions.map((s, i) => (
               <Bar
                 key={`${s.slug}-proj`}
@@ -203,7 +238,7 @@ export function PymeProjectionChart({
               stroke="#0f172a"
               strokeWidth={2.5}
               strokeDasharray="6 4"
-              dot={{ r: 4, fill: "#0f172a" }}
+              dot={{ r: 3, fill: "#0f172a" }}
               isAnimationActive={false}
             />
           </ComposedChart>
@@ -211,11 +246,10 @@ export function PymeProjectionChart({
       </div>
 
       <p className="mt-3 text-[11px] text-gray-400">
-        Real = acumulado estimado a la fecha (hoy se aproxima como{" "}
-        <span className="font-medium">meta × % avance del proyecto</span>, distribuido en los
-        trimestres pasados con ramp-up estándar 5% / 25% / 60% / 100%). Proyección = meta restante
-        distribuida con el mismo ramp-up. Cuando el Sheet reporte adquisición real por solución y
-        trimestre, las barras sólidas se sustituirán automáticamente.
+        Real = acumulado mensual reportado en la pestaña{" "}
+        <span className="font-medium">KPIs_PYMEs</span> del Sheet (cliente actualiza al cierre de
+        cada mes). Proyección = trayectoria lineal entre el último mes reportado y la meta a
+        diciembre.
       </p>
     </div>
   );

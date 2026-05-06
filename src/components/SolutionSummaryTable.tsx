@@ -1,10 +1,12 @@
 import type { Estado, EtapaName, SolutionSummary } from "@/lib/types";
 import { ETAPAS } from "@/lib/types";
 import { ETAPA_LABELS } from "@/lib/solutions";
-import { getPymeTarget } from "@/lib/pyme-targets";
 import Link from "next/link";
 
-const QUARTER_RAMP = [0.05, 0.25, 0.6, 1.0];
+const UNIT_SHORT: Record<string, string> = {
+  trabajadores: "trab.",
+  empresas: "emp.",
+};
 
 const CELL_BY_ESTADO: Record<Estado, string> = {
   "En curso": "bg-emerald-100/80 text-emerald-800",
@@ -34,16 +36,11 @@ function fechaDisplay(fecha: string): { value: string; tone: "amber" | "neutral"
 export function SolutionSummaryTable({
   summaries,
   showSocio = true,
-  today = new Date(),
 }: {
   summaries: SolutionSummary[];
   showSocio?: boolean;
-  today?: Date;
 }) {
   if (summaries.length === 0) return null;
-
-  const todayQ = Math.floor(today.getMonth() / 3);
-  const refRamp = QUARTER_RAMP[todayQ] || 1;
 
   return (
     <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -83,10 +80,8 @@ export function SolutionSummaryTable({
         </thead>
         <tbody>
           {summaries.map((s, idx) => {
-            const target = getPymeTarget(s.slug);
-            const meta = target?.pymeTarget ?? null;
-            const acum =
-              meta != null ? Math.round(meta * (s.avance / 100) * (1 / refRamp) * QUARTER_RAMP[todayQ]) : null;
+            const meta = s.pymeMeta;
+            const acum = s.pymeAcum;
             const pct = meta != null && meta > 0 && acum != null ? Math.min(100, (acum / meta) * 100) : 0;
             const fecha = fechaDisplay(s.fechaHito);
 
@@ -129,32 +124,38 @@ export function SolutionSummaryTable({
                 </td>
 
                 <td className="border-t border-l border-gray-100 px-3 py-2">
-                  {meta != null && acum != null ? (
+                  {meta != null || acum != null ? (
                     <div>
                       <div className="flex items-baseline gap-1 text-xs tabular-nums">
-                        <span className="font-semibold text-gray-900">{formatNumber(acum)}</span>
-                        <span className="text-gray-400">/ {formatNumber(meta)}</span>
-                        {target?.unit && target.unit !== "pymes" && (
+                        <span className="font-semibold text-gray-900">
+                          {acum != null ? formatNumber(acum) : "—"}
+                        </span>
+                        <span className="text-gray-400">
+                          / {meta != null ? formatNumber(meta) : "—"}
+                        </span>
+                        {s.pymeUnit && UNIT_SHORT[s.pymeUnit.toLowerCase()] && (
                           <span className="text-[10px] text-gray-400">
-                            ({target.unit === "trabajadores" ? "trab." : "emp."})
+                            ({UNIT_SHORT[s.pymeUnit.toLowerCase()]})
                           </span>
                         )}
                       </div>
-                      <div className="mt-1 h-1 w-24 overflow-hidden rounded-full bg-gray-100">
-                        <div
-                          className={`h-full ${
-                            pct >= 80
-                              ? "bg-blue-500"
-                              : pct >= 50
-                                ? "bg-emerald-500"
-                                : pct >= 20
-                                  ? "bg-amber-500"
-                                  : "bg-red-400"
-                          }`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      {target?.sharedGroup && (
+                      {meta != null && acum != null && (
+                        <div className="mt-1 h-1 w-24 overflow-hidden rounded-full bg-gray-100">
+                          <div
+                            className={`h-full ${
+                              pct >= 80
+                                ? "bg-blue-500"
+                                : pct >= 50
+                                  ? "bg-emerald-500"
+                                  : pct >= 20
+                                    ? "bg-amber-500"
+                                    : "bg-red-400"
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      )}
+                      {s.pymeSharedGroup && (
                         <p className="mt-0.5 text-[10px] text-amber-600">meta compartida</p>
                       )}
                     </div>
@@ -185,8 +186,8 @@ export function SolutionSummaryTable({
       </table>
 
       <p className="border-t border-gray-100 bg-gray-50/40 px-4 py-2 text-[11px] text-gray-400">
-        PYMEs acumuladas: estimación a la fecha (meta × % avance proyecto, distribuido en ramp-up
-        estándar). Se reemplazará por adquisición real cuando el Sheet la reporte.
+        PYMEs acum / meta vienen de la pestaña <span className="font-medium">KPIs_PYMEs</span> del
+        Sheet. El cliente las edita directo allí.
       </p>
     </div>
   );

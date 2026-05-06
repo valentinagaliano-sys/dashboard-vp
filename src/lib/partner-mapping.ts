@@ -28,7 +28,10 @@ const DOMAIN_TO_PARTNER: Record<string, string> = {
 };
 
 const EMAIL_TO_PARTNER: Record<string, string> = {
-  // Excepciones por usuario individual cuando el dominio no aplica.
+  // Override explícito email → socio. Tiene precedencia sobre los dominios admin,
+  // así puedes tener cuentas de prueba "como empresa" en dominios que normalmente
+  // serían admin (ej. bci.cl).
+  "prueba.bci@bci.cl": "BCI",
 };
 
 export function resolveUser(email: string | null | undefined): ResolvedUser | null {
@@ -37,6 +40,18 @@ export function resolveUser(email: string | null | undefined): ResolvedUser | nu
   if (!normalized) return null;
   const domain = normalized.split("@")[1] ?? "";
 
+  // 1. Override explícito por email — siempre lo trato como empresa.
+  if (EMAIL_TO_PARTNER[normalized]) {
+    const canonical = canonicalPartner(EMAIL_TO_PARTNER[normalized]) ?? EMAIL_TO_PARTNER[normalized];
+    return {
+      role: "partner",
+      partner: canonical,
+      label: "Empresa",
+      subLabel: canonical,
+    };
+  }
+
+  // 2. Dominios administrativos (FE / directores BCI).
   if (FE_INTERNAL_DOMAINS.has(domain)) {
     return {
       role: "admin",
@@ -55,7 +70,8 @@ export function resolveUser(email: string | null | undefined): ResolvedUser | nu
     };
   }
 
-  const partnerName = EMAIL_TO_PARTNER[normalized] ?? DOMAIN_TO_PARTNER[domain];
+  // 3. Resto: dominio → socio.
+  const partnerName = DOMAIN_TO_PARTNER[domain];
   if (!partnerName) return null;
   const canonical = canonicalPartner(partnerName) ?? partnerName;
   return {

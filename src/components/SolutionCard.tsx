@@ -2,7 +2,6 @@ import Link from "next/link";
 import type { SolutionSummary } from "@/lib/types";
 import { EtapaDots } from "./EtapaDots";
 import { AvanceBar } from "./AvanceBar";
-import { getPymeTarget } from "@/lib/pyme-targets";
 
 const UNIT_LABEL: Record<string, string> = {
   pymes: "PYMEs",
@@ -14,10 +13,14 @@ function formatNumber(n: number): string {
   return n.toLocaleString("es-CL");
 }
 
+function unitLabel(unit: string | null): string {
+  if (!unit) return "PYMEs";
+  return UNIT_LABEL[unit.toLowerCase()] ?? unit;
+}
+
 export function SolutionCard({ s, showSocio = true }: { s: SolutionSummary; showSocio?: boolean }) {
   const href = `/dashboard/${s.slug}`;
   const hasFecha = s.fechaHito && s.fechaHito.toLowerCase() !== "pendiente";
-  const target = getPymeTarget(s.slug);
 
   return (
     <Link
@@ -43,23 +46,31 @@ export function SolutionCard({ s, showSocio = true }: { s: SolutionSummary; show
         <AvanceBar value={s.avance} size="sm" />
       </div>
 
-      {/* KPI principal: meta de PYMEs */}
+      {/* KPI principal: PYMEs acumulado / meta */}
       <div className="mt-4 flex items-end justify-between border-b border-gray-100 pb-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Meta 2026</p>
-          {target && target.pymeTarget != null ? (
-            <p className="mt-0.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+            PYMEs · acum / meta 2026
+          </p>
+          {s.pymeMeta != null || s.pymeAcum != null ? (
+            <p className="mt-0.5 flex items-baseline gap-1">
               <span className="text-xl font-semibold tabular-nums text-brand-700">
-                {formatNumber(target.pymeTarget)}
-              </span>{" "}
-              <span className="text-xs text-gray-500">{UNIT_LABEL[target.unit ?? "pymes"]}</span>
+                {s.pymeAcum != null ? formatNumber(s.pymeAcum) : "—"}
+              </span>
+              <span className="text-sm text-gray-400">
+                / {s.pymeMeta != null ? formatNumber(s.pymeMeta) : "—"}
+              </span>
+              <span className="text-xs text-gray-500">{unitLabel(s.pymeUnit)}</span>
             </p>
           ) : (
             <p className="mt-0.5 text-sm text-gray-400">por definir</p>
           )}
         </div>
-        {target?.sharedGroup && (
-          <span className="text-[10px] uppercase tracking-wider text-amber-600" title="Meta compartida con otra solución">
+        {s.pymeSharedGroup && (
+          <span
+            className="text-[10px] uppercase tracking-wider text-amber-600"
+            title="Meta compartida con otra solución"
+          >
             meta compartida
           </span>
         )}

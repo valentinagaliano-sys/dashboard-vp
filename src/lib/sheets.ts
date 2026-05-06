@@ -2,22 +2,27 @@ import { google } from "googleapis";
 import {
   type GanttRow,
   type SolutionSummary,
+  type PartnerSummary,
   type SolutionDetail,
   type EtapaDetail,
   type Tarea,
   type Estado,
+  type PymeKpis,
   ETAPAS,
 } from "./types";
-import { canonicalPartner, findDetTab, findSolutionByTab, solutionSlug } from "./solutions";
+import { canonicalPartner, findDetTab, findSolutionByTab, solutionSlug, slugify } from "./solutions";
 
 const GANTT_TAB = "3. Gantt por solución";
 const CONSOLIDADO_TAB = "4. Consolidado (etapas x sol)";
-const CACHE_TTL_MS = 2 * 60 * 1000;
+const KPIS_TAB = "KPIs_PYMEs";
+const KPIS_PARTNERS_TAB = "KPIs_PYMEs_Partners";
+const CACHE_TTL_MS = 30 * 1000;
 
 type AggregateData = {
   weeks: string[];
   ganttRows: GanttRow[];
   summaries: SolutionSummary[];
+  partnerSummaries: PartnerSummary[];
   fetchedAt: number;
 };
 
@@ -52,6 +57,26 @@ function s(v: unknown): string {
   return String(v ?? "").trim();
 }
 
+/**
+ * Normaliza nombres de eje al canónico de `EJES`. Tolera casing y variantes
+ * heredadas ("Talento" → "Gestión y Talento", "Productividad" → "Digitalización").
+ */
+const EJE_ALIASES: Record<string, string> = {
+  capital: "Capital",
+  mercado: "Mercado",
+  digitalización: "Digitalización",
+  digitalizacion: "Digitalización",
+  productividad: "Digitalización",
+  talento: "Gestión y Talento",
+  "gestión y talento": "Gestión y Talento",
+  "gestion y talento": "Gestión y Talento",
+};
+function normalizeEje(raw: string): string {
+  if (!raw) return "";
+  const k = raw.trim().toLowerCase();
+  return EJE_ALIASES[k] ?? raw.trim();
+}
+
 function parseEstado(raw: string): Estado {
   const e = raw.trim();
   if (!e) return "";
@@ -63,10 +88,18 @@ function parseEstado(raw: string): Estado {
   return e as Estado;
 }
 
-function parsePercent(raw: string): number {
-  const m = raw.replace(/\s/g, "").match(/([\d]+)\s*%/);
+function parsePercent(raw: unknown): number {
+  if (raw == null || raw === "") return 0;
+  // Si ya viene como number (UNFORMATTED_VALUE de una celda con formato % devuelve 0.4 = 40%).
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return 0;
+    if (raw <= 1) return Math.round(raw * 100);
+    return Math.max(0, Math.min(100, raw));
+  }
+  const text = String(raw).replace(/\s/g, "");
+  const m = text.match(/([\d]+)\s*%/);
   if (m) return Math.max(0, Math.min(100, Number(m[1])));
-  const num = Number(raw);
+  const num = Number(text);
   if (!isNaN(num)) {
     if (num <= 1) return Math.round(num * 100);
     return Math.max(0, Math.min(100, num));
@@ -83,55 +116,256 @@ export async function fetchAggregate(force = false): Promise<AggregateData> {
   const sheets = sheetsClient();
   const res = await sheets.spreadsheets.values.batchGet({
     spreadsheetId: sheetId,
-    ranges: [`'${GANTT_TAB}'!A1:AT200`, `'${CONSOLIDADO_TAB}'!A1:L80`],
+    ranges: [
+      `'${GANTT_TAB}'!A1:AT200`,
+      `'${CONSOLIDADO_TAB}'!A1:L80`,
+      `'${KPIS_TAB}'!A1:U60`,
+      `'${KPIS_PARTNERS_TAB}'!A1:U80`,
+    ],
+    // UNFORMATTED_VALUE: los números llegan como `number`, sin pasar por el
+    // formato visual del Sheet (que usa "," como separador de miles en es-CL).
+    // Las fechas se piden como string para no recibir serial numbers.
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "FORMATTED_STRING",
   });
 
   const ganttValues = res.data.valueRanges?.[0]?.values ?? [];
   const consolidadoValues = res.data.valueRanges?.[1]?.values ?? [];
+  const kpisValues = res.data.valueRanges?.[2]?.values ?? [];
+  const kpisPartnerValues = res.data.valueRanges?.[3]?.values ?? [];
 
-  const { weeks, rows: ganttRows } = parseGantt(ganttValues);
-  const summaries = parseConsolidado(consolidadoValues);
+  const { weeks, rows: ganttRows, ejeBySlug } = parseGantt(ganttValues);
+  const kpisBySlug = parseKpiSheet(kpisValues, "socio");
+  const summariesRaw = parseConsolidado(consolidadoValues, kpisBySlug);
+  // El Gantt es la fuente de verdad para el eje (columna "Eje" editable por el cliente).
+  const summaries = summariesRaw.map((s) => ({
+    ...s,
+    eje: ejeBySlug.get(s.slug) ?? s.eje,
+  }));
+  const partnerSummaries = buildPartnerSummaries(kpisPartnerValues);
 
-  const data: AggregateData = { weeks, ganttRows, summaries, fetchedAt: Date.now() };
+  const data: AggregateData = {
+    weeks,
+    ganttRows,
+    summaries,
+    partnerSummaries,
+    fetchedAt: Date.now(),
+  };
   aggregateCache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
   return data;
 }
 
-function parseGantt(values: any[][]): { weeks: string[]; rows: GanttRow[] } {
-  // Buscar fila con fechas tipo "06-Apr"
+type KpiRow = {
+  /** "BCI", "Fintegram", etc. — primera columna. */
+  entity: string;
+  solucion: string;
+  slug: string;
+  kpis: PymeKpis;
+};
+
+const MONTH_HEADERS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+/**
+ * Parser genérico de las pestañas KPIs_PYMEs y KPIs_PYMEs_Partners.
+ * Header esperado (en cualquier orden):
+ *   <Socio|Partner> | Solución | Eje | Unidad | Meta 2026 | Ene..Dic | Segmentos | Notas | Grupo compartido | Fuente
+ *
+ * @param mode "socio" para socios (canonicaliza con `canonicalPartner`); "partner"
+ *             usa el nombre tal cual.
+ */
+function parseKpiSheet(values: any[][], mode: "socio" | "partner"): Map<string, KpiRow> {
+  const out = new Map<string, KpiRow>();
+  if (!values.length) return out;
+
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(values.length, 5); i++) {
+    const row = values[i] || [];
+    const c0 = s(row[0]).toLowerCase();
+    if ((c0 === "socio" || c0 === "partner") && s(row[1]).toLowerCase().startsWith("soluc")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return out;
+
+  const header = (values[headerIdx] || []).map((c) => s(c).toLowerCase());
+  const findCol = (...candidates: string[]): number => {
+    for (const cand of candidates) {
+      const idx = header.findIndex((h) => h === cand || h.startsWith(cand));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  const colEje = findCol("eje");
+  const colUnit = findCol("unidad");
+  const colMeta = findCol("meta 2026", "meta");
+  const colSegm = findCol("segmentos");
+  const colNotas = findCol("notas");
+  const colShared = findCol("grupo compartido", "grupo");
+  const colFuente = findCol("fuente");
+  const monthCols: number[] = MONTH_HEADERS.map((m) => header.findIndex((h) => h === m || h.startsWith(m)));
+
+  for (let i = headerIdx + 1; i < values.length; i++) {
+    const row = values[i] || [];
+    const entityRaw = s(row[0]);
+    const solucion = s(row[1]);
+    if (!entityRaw || !solucion) continue;
+
+    const entity = mode === "socio" ? (canonicalPartner(entityRaw) ?? entityRaw) : entityRaw;
+    const slug =
+      mode === "socio"
+        ? solutionSlug(entity, solucion)
+        : slugify(`partner-${entity}-${solucion}`);
+
+    const monthly: (number | null)[] = monthCols.map((c) =>
+      c >= 0 ? parseNumberOrNull(row[c]) : null
+    );
+    let acum: number | null = null;
+    let acumMonth = -1;
+    for (let m = 0; m < 12; m++) {
+      if (monthly[m] != null) {
+        acum = monthly[m];
+        acumMonth = m;
+      }
+    }
+
+    const kpis: PymeKpis = {
+      eje: colEje >= 0 ? normalizeEje(s(row[colEje])) || null : null,
+      pymeMeta: colMeta >= 0 ? parseNumberOrNull(row[colMeta]) : null,
+      pymeUnit: colUnit >= 0 ? s(row[colUnit]) || null : null,
+      pymeSegmentos: colSegm >= 0 ? s(row[colSegm]) || null : null,
+      pymeNotas: colNotas >= 0 ? s(row[colNotas]) || null : null,
+      pymeSharedGroup: colShared >= 0 ? s(row[colShared]) || null : null,
+      pymeFuente: colFuente >= 0 ? s(row[colFuente]) || null : null,
+      pymeMonthly: monthly,
+      pymeAcum: acum,
+      pymeAcumMonth: acumMonth,
+    };
+
+    out.set(slug, { entity, solucion, slug, kpis });
+  }
+  return out;
+}
+
+function buildPartnerSummaries(values: any[][]): PartnerSummary[] {
+  const map = parseKpiSheet(values, "partner");
+  return Array.from(map.values()).map((r) => ({
+    partner: r.entity,
+    solucion: r.solucion,
+    slug: r.slug,
+    ...r.kpis,
+  }));
+}
+
+/**
+ * Convierte el valor de una celda a número.
+ * Con `UNFORMATTED_VALUE` Sheets devuelve los números como `number` directo —
+ * sólo necesitamos parsear strings (cuando la celda fue escrita como texto).
+ */
+function parseNumberOrNull(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  // Soporta sufijos K/M y separadores de miles (".", ",").
+  const cleaned = text.replace(/\s/g, "").toUpperCase();
+  const km = cleaned.match(/^([\d.,]+)([KM])$/);
+  if (km) {
+    const base = km[1].replace(/[.,]/g, "");
+    const n = Number(base);
+    if (isNaN(n)) return null;
+    return Math.round(n * (km[2] === "K" ? 1_000 : 1_000_000));
+  }
+  // Sin sufijo: quitar todo lo que no sea dígito o signo y devolver entero.
+  // (Las metas son enteros; si alguna vez se necesita decimal, reescribir aquí).
+  const onlyDigits = cleaned.replace(/[^0-9-]/g, "");
+  if (!onlyDigits || onlyDigits === "-") return null;
+  const n = Number(onlyDigits);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseGantt(values: any[][]): {
+  weeks: string[];
+  rows: GanttRow[];
+  /** Mapa slug → eje desde la columna "Eje" del Gantt (fuente de verdad). */
+  ejeBySlug: Map<string, string>;
+} {
+  // Buscar la fila de header dinámicamente (columnas etiquetadas).
   let headerRowIdx = -1;
   for (let i = 0; i < Math.min(values.length, 10); i++) {
-    const row = values[i] || [];
-    if (row.some((c) => /^\d{1,2}-[A-Za-z]{3}$/.test(s(c)))) {
+    const row = (values[i] || []).map((c: any) => s(c).toLowerCase());
+    const hasSocio = row.some((c: string) => c === "socio");
+    const hasSolucion = row.some((c: string) => c.startsWith("soluc"));
+    const hasEtapa = row.some((c: string) => c === "etapa");
+    if (hasSocio && hasSolucion && hasEtapa) {
       headerRowIdx = i;
       break;
     }
   }
-  if (headerRowIdx < 0) return { weeks: [], rows: [] };
+  if (headerRowIdx < 0) return { weeks: [], rows: [], ejeBySlug: new Map() };
 
-  const weeks = (values[headerRowIdx] || []).slice(5).map(s).filter(Boolean);
+  const headerRow = (values[headerRowIdx] || []).map((c: any) => s(c).toLowerCase());
+  const findCol = (...candidates: string[]): number => {
+    for (const cand of candidates) {
+      const idx = headerRow.findIndex((h: string) => h === cand || h.startsWith(cand));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  const colEje = findCol("eje");
+  const colSocio = findCol("socio");
+  const colSol = findCol("soluc");
+  const colEtapa = findCol("etapa");
+  const colResp = findCol("responsable", "respons");
+  const colEstado = findCol("estado");
+
+  // Las columnas semanales son todas las que matchean "06-Apr" en el header.
+  const weekCols: number[] = [];
+  for (let i = 0; i < headerRow.length; i++) {
+    if (/^\d{1,2}-[a-z]{3}$/.test(headerRow[i])) weekCols.push(i);
+  }
+  const weeks = weekCols.map((c) => s(values[headerRowIdx][c]));
+
   const rows: GanttRow[] = [];
+  const ejeBySlug = new Map<string, string>();
+  let lastEje = "";
   let lastSocio = "";
   let lastSolucion = "";
 
   for (let i = headerRowIdx + 1; i < values.length; i++) {
     const row = values[i] || [];
     if (row.length === 0) continue;
-    const socio = s(row[0]) || lastSocio;
-    const solucion = s(row[1]) || lastSolucion;
-    const etapa = s(row[2]);
-    const responsable = s(row[3]);
-    const estado = s(row[4]);
+    const rawSocio = colSocio >= 0 ? s(row[colSocio]) : "";
+    const rawEje = colEje >= 0 ? s(row[colEje]) : "";
+    // Reset del carry-forward de eje al cambiar de socio: la celda de socio nueva
+    // marca el inicio de un bloque y el eje aplica sólo dentro de ese bloque.
+    // Si el cliente no completó el eje, lastEje queda vacío para ese socio.
+    if (rawSocio) lastEje = rawEje;
+    else if (rawEje) lastEje = rawEje;
+
+    const eje = normalizeEje(lastEje);
+    const socio = rawSocio || lastSocio;
+    const solucion = colSol >= 0 ? s(row[colSol]) || lastSolucion : "";
+    const etapa = colEtapa >= 0 ? s(row[colEtapa]) : "";
+    const responsable = colResp >= 0 ? s(row[colResp]) : "";
+    const estado = colEstado >= 0 ? s(row[colEstado]) : "";
     if (!etapa) continue;
-    if (socio) lastSocio = socio;
+    if (rawSocio) lastSocio = rawSocio;
     if (solucion) lastSolucion = solucion;
-    const semanas = weeks.map((_, idx) => s(row[5 + idx]));
-    rows.push({ socio, solucion, etapa, responsable, estado, semanas });
+
+    const semanas = weekCols.map((c) => s(row[c]));
+    rows.push({ eje, socio, solucion, etapa, responsable, estado, semanas });
+
+    if (eje && socio && solucion) {
+      const canonical = canonicalPartner(socio) ?? socio;
+      const slug = solutionSlug(canonical, solucion);
+      if (!ejeBySlug.has(slug)) ejeBySlug.set(slug, eje);
+    }
   }
-  return { weeks, rows };
+  return { weeks, rows, ejeBySlug };
 }
 
-function parseConsolidado(values: any[][]): SolutionSummary[] {
+function parseConsolidado(values: any[][], kpisBySlug: Map<string, KpiRow>): SolutionSummary[] {
   // Header esperado: Socio | Solución | 1.Prep | 2.Conv | 3.Adop | 4.Acomp | 5.Eval | %Avance | Próximo hito | Fecha | Comentarios
   let headerIdx = -1;
   for (let i = 0; i < Math.min(values.length, 8); i++) {
@@ -162,22 +396,34 @@ function parseConsolidado(values: any[][]): SolutionSummary[] {
       etapa,
       estado: parseEstado(s(row[2 + idx])),
     }));
-    const avance = parsePercent(s(row[7]));
+    const avance = parsePercent(row[7]);
     const proximoHito = s(row[8]);
     const fechaHito = s(row[9]);
     const comentarios = s(row[10]);
     const detTab = findDetTab(socio, solucion);
+    const slug = solutionSlug(socio, solucion);
+    const kpi = kpisBySlug.get(slug);
 
     out.push({
       socio,
       solucion,
-      slug: solutionSlug(socio, solucion),
+      slug,
       detTab,
       etapas,
       avance,
       proximoHito,
       fechaHito,
       comentarios,
+      eje: kpi?.kpis.eje ?? null,
+      pymeMeta: kpi?.kpis.pymeMeta ?? null,
+      pymeUnit: kpi?.kpis.pymeUnit ?? null,
+      pymeSegmentos: kpi?.kpis.pymeSegmentos ?? null,
+      pymeNotas: kpi?.kpis.pymeNotas ?? null,
+      pymeSharedGroup: kpi?.kpis.pymeSharedGroup ?? null,
+      pymeFuente: kpi?.kpis.pymeFuente ?? null,
+      pymeMonthly: kpi?.kpis.pymeMonthly ?? Array(12).fill(null),
+      pymeAcum: kpi?.kpis.pymeAcum ?? null,
+      pymeAcumMonth: kpi?.kpis.pymeAcumMonth ?? -1,
     });
   }
   return out;

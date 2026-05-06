@@ -1,5 +1,5 @@
 import type { SolutionSummary } from "@/lib/types";
-import { totalPymeTarget } from "@/lib/pyme-targets";
+import { totalPymeMeta, totalPymeAcum } from "@/lib/pyme-targets";
 
 function parseDateChile(s: string): Date | null {
   if (!s) return null;
@@ -31,13 +31,19 @@ export function KpiCards({ summaries }: { summaries: SolutionSummary[] }) {
     (s) => s.proximoHito && (!s.fechaHito || s.fechaHito.toLowerCase() === "pendiente")
   ).length;
 
-  const { total: pymesObjetivo } = totalPymeTarget(summaries.map((s) => s.slug));
+  const { total: pymesMeta } = totalPymeMeta(summaries);
+  const { total: pymesAcum } = totalPymeAcum(summaries);
+  const sharePct = pymesMeta > 0 ? Math.round((pymesAcum / pymesMeta) * 100) : 0;
+
+  const pymeValue = pymesMeta > 0 || pymesAcum > 0
+    ? `${formatNumber(pymesAcum)} / ${formatNumber(pymesMeta)}`
+    : "—";
 
   const stats = [
     {
-      label: "PYMEs objetivo (adquisición)",
-      value: pymesObjetivo > 0 ? formatNumber(pymesObjetivo) : "—",
-      sub: "meta combinada · directorio 31-mar",
+      label: "PYMEs · acum / meta 2026",
+      value: pymeValue,
+      sub: pymesMeta > 0 ? `${sharePct}% de avance hacia la meta` : "fuente: pestaña KPIs_PYMEs",
       accent: true,
     },
     { label: "Soluciones activas", value: total, sub: `${socios} socios` },
@@ -59,9 +65,9 @@ export function KpiCards({ summaries }: { summaries: SolutionSummary[] }) {
         >
           <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">{s.label}</p>
           <p
-            className={`mt-2 text-3xl font-semibold tabular-nums ${
-              s.warn ? "text-amber-700" : s.accent ? "text-brand-700" : "text-gray-900"
-            }`}
+            className={`mt-2 font-semibold tabular-nums ${
+              s.accent ? "text-xl lg:text-2xl" : "text-3xl"
+            } ${s.warn ? "text-amber-700" : s.accent ? "text-brand-700" : "text-gray-900"}`}
           >
             {s.value}
           </p>

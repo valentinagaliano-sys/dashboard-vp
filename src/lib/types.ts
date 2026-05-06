@@ -34,6 +34,7 @@ export type ResolvedUser = {
 
 /** Fila plana del Gantt (tab 3): cobertura por etapa, sin tareas. */
 export type GanttRow = {
+  eje: string;
   socio: string;
   solucion: string;
   etapa: string;
@@ -42,8 +43,30 @@ export type GanttRow = {
   semanas: string[];
 };
 
-/** Resumen ejecutivo por solución (tab 4 — Consolidado). */
-export type SolutionSummary = {
+/** Eje del programa Valor Pyme — orden canónico para visualización. */
+export type Eje = "Capital" | "Mercado" | "Digitalización" | "Gestión y Talento";
+export const EJES: Eje[] = ["Capital", "Mercado", "Digitalización", "Gestión y Talento"];
+
+/** Campos KPI compartidos por socios y partners. Provienen de las pestañas
+ *  KPIs_PYMEs / KPIs_PYMEs_Partners (editables por el cliente). */
+export type PymeKpis = {
+  eje: string | null;
+  pymeMeta: number | null;
+  pymeUnit: string | null;            // "pymes" | "trabajadores" | "empresas" | …
+  pymeSegmentos: string | null;
+  pymeNotas: string | null;
+  pymeSharedGroup: string | null;
+  pymeFuente: string | null;
+  /** Histórico mensual del acumulado, indexado por mes 0..11. `null` si no reportado. */
+  pymeMonthly: (number | null)[];
+  /** Último valor reportado (último mes no nulo); `null` si nunca se reportó. */
+  pymeAcum: number | null;
+  /** Mes (0..11) del último reporte, o -1 si no hay. */
+  pymeAcumMonth: number;
+};
+
+/** Resumen ejecutivo por solución de socio (tab 4 + KPIs_PYMEs). */
+export type SolutionSummary = PymeKpis & {
   socio: string;
   solucion: string;
   slug: string;
@@ -53,6 +76,13 @@ export type SolutionSummary = {
   proximoHito: string;
   fechaHito: string;
   comentarios: string;
+};
+
+/** Solución entregada por un partner (KPIs_PYMEs_Partners). */
+export type PartnerSummary = PymeKpis & {
+  partner: string;
+  solucion: string;
+  slug: string;
 };
 
 /** Detalle por solución (tabs Det_*). */

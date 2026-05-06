@@ -1,0 +1,35 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const TABS: { href: string; label: string; matchExact?: boolean }[] = [
+  { href: "/dashboard", label: "Resumen", matchExact: true },
+  { href: "/dashboard/socios", label: "Socios" },
+  { href: "/dashboard/partners", label: "Partners" },
+];
+
+export function NavTabs({ visible = true }: { visible?: boolean }) {
+  const pathname = usePathname();
+  if (!visible) return null;
+  return (
+    <nav className="flex items-center gap-1 border-b border-gray-200">
+      {TABS.map((t) => {
+        const active = t.matchExact ? pathname === t.href : pathname.startsWith(t.href);
+        return (
+          <Link
+            key={t.href}
+            href={t.href}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition ${
+              active
+                ? "border-brand-600 text-brand-700"
+                : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800"
+            }`}
+          >
+            {t.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}

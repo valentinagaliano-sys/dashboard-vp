@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { SignOutButton } from "./SignOutButton";
+import { RefreshButton } from "./RefreshButton";
+import { NavTabs } from "./NavTabs";
 import type { ResolvedUser } from "@/lib/types";
 
 export function Shell({
@@ -37,21 +39,16 @@ export function Shell({
             </span>
           </div>
           <div className="flex items-center gap-3">
-            {fetchedAt && (
-              <span className="hidden text-xs text-gray-500 lg:inline">
-                Actualizado{" "}
-                {new Date(fetchedAt).toLocaleString("es-CL", {
-                  day: "2-digit",
-                  month: "short",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </span>
-            )}
+            <RefreshButton fetchedAt={fetchedAt ?? null} />
             <span className="hidden text-xs text-gray-600 sm:inline">{email}</span>
             <SignOutButton />
           </div>
         </div>
+        {user.role === "admin" && (
+          <div className="mx-auto max-w-7xl px-6">
+            <NavTabs />
+          </div>
+        )}
       </header>
       <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
     </div>

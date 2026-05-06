@@ -3,13 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchAggregate } from "@/lib/sheets";
 import { resolveUser, filterGanttForUser, filterSummariesForUser } from "@/lib/partner-mapping";
 import { Shell } from "@/components/Shell";
-import { ResumenView } from "@/components/ResumenView";
 import { SociosView } from "@/components/SociosView";
-import type { ResolvedUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardSociosPage() {
   const bypass = process.env.BYPASS_AUTH === "1";
   let userEmail: string | null = null;
   if (bypass) {
@@ -24,23 +22,14 @@ export default async function DashboardPage() {
   }
 
   const user = resolveUser(userEmail);
-  if (!user) {
-    return (
-      <UnauthorizedShell email={userEmail}>
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-800">
-          <h2 className="text-lg font-semibold">Tu cuenta aún no está asociada a un socio</h2>
-          <p className="mt-2 text-sm">
-            Contacta a tu ejecutivo FE para vincular <strong>{userEmail}</strong> a un socio del programa.
-          </p>
-        </div>
-      </UnauthorizedShell>
-    );
-  }
+  if (!user) redirect("/dashboard");
+
+  // Esta vista es solo para administradores. Las empresas vuelven a /dashboard.
+  if (user.role === "partner") redirect("/dashboard");
 
   let weeks: string[] = [];
   let ganttRows: ReturnType<typeof filterGanttForUser> = [];
   let summaries: ReturnType<typeof filterSummariesForUser> = [];
-  let partnerSummaries: Awaited<ReturnType<typeof fetchAggregate>>["partnerSummaries"] = [];
   let fetchedAt = 0;
   let errorMsg: string | null = null;
 
@@ -49,7 +38,6 @@ export default async function DashboardPage() {
     weeks = agg.weeks;
     ganttRows = filterGanttForUser(agg.ganttRows, user);
     summaries = filterSummariesForUser(agg.summaries, user);
-    partnerSummaries = agg.partnerSummaries;
     fetchedAt = agg.fetchedAt;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : "Error leyendo el Sheet";
@@ -63,33 +51,7 @@ export default async function DashboardPage() {
           <p className="mt-1">{errorMsg}</p>
         </div>
       )}
-
-      {/* Admin: Resumen agregado. Partner: vista de sus soluciones (filtradas). */}
-      {user.role === "admin" ? (
-        <ResumenView user={user} summaries={summaries} partnerSummaries={partnerSummaries} />
-      ) : (
-        <SociosView user={user} summaries={summaries} ganttRows={ganttRows} weeks={weeks} />
-      )}
-    </Shell>
-  );
-}
-
-function UnauthorizedShell({
-  email,
-  children,
-}: {
-  email: string | null;
-  children: React.ReactNode;
-}) {
-  const fakeUser: ResolvedUser = {
-    role: "partner",
-    partner: "—",
-    label: "Empresa",
-    subLabel: "—",
-  };
-  return (
-    <Shell user={fakeUser} email={email}>
-      {children}
+      <SociosView user={user} summaries={summaries} ganttRows={ganttRows} weeks={weeks} />
     </Shell>
   );
 }

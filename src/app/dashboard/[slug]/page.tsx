@@ -8,7 +8,6 @@ import { Shell } from "@/components/Shell";
 import { AvanceBar } from "@/components/AvanceBar";
 import { EstadoBadge } from "@/components/EtapaDots";
 import { MiniGantt } from "@/components/MiniGantt";
-import { getPymeTarget } from "@/lib/pyme-targets";
 
 const UNIT_LABEL: Record<string, string> = {
   pymes: "PYMEs",
@@ -18,6 +17,11 @@ const UNIT_LABEL: Record<string, string> = {
 
 function formatNumber(n: number): string {
   return n.toLocaleString("es-CL");
+}
+
+function unitLabel(unit: string | null): string {
+  if (!unit) return "PYMEs";
+  return UNIT_LABEL[unit.toLowerCase()] ?? unit;
 }
 
 export const dynamic = "force-dynamic";
@@ -110,49 +114,48 @@ export default async function SolutionDetailPage({ params }: { params: { slug: s
           <AvanceBar value={summary?.avance ?? detail?.avance ?? 0} size="lg" />
         </div>
 
-        {(() => {
-          const target = getPymeTarget(params.slug);
-          if (!target) return null;
-          return (
-            <div className="mt-5 rounded-xl border border-brand-200 bg-gradient-to-br from-brand-50 to-white p-5">
-              <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-700">
-                    Meta 2026 — adquisición
+        {summary && (summary.pymeMeta != null || summary.pymeAcum != null || summary.pymeNotas) && (
+          <div className="mt-5 rounded-xl border border-brand-200 bg-gradient-to-br from-brand-50 to-white p-5">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-700">
+                  PYMEs · acum / meta 2026
+                </p>
+                {summary.pymeMeta != null || summary.pymeAcum != null ? (
+                  <p className="mt-1 flex items-baseline gap-2">
+                    <span className="text-3xl font-semibold tabular-nums text-brand-800">
+                      {summary.pymeAcum != null ? formatNumber(summary.pymeAcum) : "—"}
+                    </span>
+                    <span className="text-lg text-gray-400">
+                      / {summary.pymeMeta != null ? formatNumber(summary.pymeMeta) : "—"}
+                    </span>
+                    <span className="text-sm text-gray-600">{unitLabel(summary.pymeUnit)}</span>
                   </p>
-                  {target.pymeTarget != null ? (
-                    <p className="mt-1">
-                      <span className="text-3xl font-semibold tabular-nums text-brand-800">
-                        {formatNumber(target.pymeTarget)}
-                      </span>{" "}
-                      <span className="text-sm text-gray-600">
-                        {UNIT_LABEL[target.unit ?? "pymes"]}
-                      </span>
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-sm text-gray-500">Meta numérica aún no reportada</p>
-                  )}
-                  {target.segmentos && (
-                    <p className="mt-1 text-xs text-gray-600">
-                      <span className="font-medium">Segmentos objetivo:</span> {target.segmentos}
-                    </p>
-                  )}
-                </div>
-                {target.sharedGroup && (
-                  <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-300">
-                    meta compartida
-                  </span>
+                ) : (
+                  <p className="mt-1 text-sm text-gray-500">Cifras pendientes en KPIs_PYMEs</p>
+                )}
+                {summary.pymeSegmentos && (
+                  <p className="mt-1 text-xs text-gray-600">
+                    <span className="font-medium">Segmentos objetivo:</span> {summary.pymeSegmentos}
+                  </p>
                 )}
               </div>
-              {target.notas && (
-                <p className="mt-3 text-sm text-gray-700">{target.notas}</p>
+              {summary.pymeSharedGroup && (
+                <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-300">
+                  meta compartida
+                </span>
               )}
-              <p className="mt-2 text-[10px] uppercase tracking-wider text-gray-400">
-                Fuente: {target.fuente}
-              </p>
             </div>
-          );
-        })()}
+            {summary.pymeNotas && (
+              <p className="mt-3 text-sm text-gray-700">{summary.pymeNotas}</p>
+            )}
+            {summary.pymeFuente && (
+              <p className="mt-2 text-[10px] uppercase tracking-wider text-gray-400">
+                Fuente: {summary.pymeFuente}
+              </p>
+            )}
+          </div>
+        )}
 
         {summary?.proximoHito && (
           <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -184,6 +187,7 @@ export default async function SolutionDetailPage({ params }: { params: { slug: s
           <MiniGantt
             weeks={detail.weeks}
             rows={detail.etapas.map((e) => ({
+              eje: summary?.eje ?? "",
               socio: meta.partner,
               solucion: meta.solucion,
               etapa: e.etapa,
