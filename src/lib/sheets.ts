@@ -170,6 +170,9 @@ const MONTH_HEADERS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "
  * Header esperado (en cualquier orden):
  *   <Socio|Partner> | Solución | Eje | Unidad | Meta 2026 | Ene..Dic | Segmentos | Notas | Grupo compartido | Fuente
  *
+ * Las columnas Ene..Dic son el ALTA de cada mes (ingresos nuevos), no el
+ * acumulado: el cliente escribe sólo lo que entró ese mes.
+ *
  * @param mode "socio" para socios (canonicaliza con `canonicalPartner`); "partner"
  *             usa el nombre tal cual.
  */
@@ -217,6 +220,8 @@ function parseKpiSheet(values: any[][], mode: "socio" | "partner"): Map<string, 
         ? solutionSlug(entity, solucion)
         : slugify(`partner-${entity}-${solucion}`);
 
+    // Cada celda mensual es el ALTA del mes (ingresos nuevos), no el acumulado.
+    // El acumulado a la fecha = suma de todos los meses reportados.
     const monthly: (number | null)[] = monthCols.map((c) =>
       c >= 0 ? parseNumberOrNull(row[c]) : null
     );
@@ -224,7 +229,7 @@ function parseKpiSheet(values: any[][], mode: "socio" | "partner"): Map<string, 
     let acumMonth = -1;
     for (let m = 0; m < 12; m++) {
       if (monthly[m] != null) {
-        acum = monthly[m];
+        acum = (acum ?? 0) + (monthly[m] as number);
         acumMonth = m;
       }
     }
@@ -261,27 +266,33 @@ function buildPartnerSummaries(values: any[][]): PartnerSummary[] {
  * Convierte el valor de una celda a número.
  * Con `UNFORMATTED_VALUE` Sheets devuelve los números como `number` directo —
  * sólo necesitamos parsear strings (cuando la celda fue escrita como texto).
+ *
+ * Devuelve `null` para celdas vacías Y para `0`, porque `0` se interpreta como
+ * "no reportado" (los KPIs son acumulados, así que un 0 entre valores reales
+ * indica que la celda no se llenó). Si el cliente quiere reflejar adopción
+ * cero, debe dejar la celda vacía.
  */
 function parseNumberOrNull(raw: unknown): number | null {
   if (raw == null || raw === "") return null;
-  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw) || raw === 0) return null;
+    return raw;
+  }
   const text = String(raw).trim();
   if (!text) return null;
-  // Soporta sufijos K/M y separadores de miles (".", ",").
   const cleaned = text.replace(/\s/g, "").toUpperCase();
   const km = cleaned.match(/^([\d.,]+)([KM])$/);
   if (km) {
     const base = km[1].replace(/[.,]/g, "");
     const n = Number(base);
-    if (isNaN(n)) return null;
+    if (!Number.isFinite(n) || n === 0) return null;
     return Math.round(n * (km[2] === "K" ? 1_000 : 1_000_000));
   }
-  // Sin sufijo: quitar todo lo que no sea dígito o signo y devolver entero.
-  // (Las metas son enteros; si alguna vez se necesita decimal, reescribir aquí).
   const onlyDigits = cleaned.replace(/[^0-9-]/g, "");
   if (!onlyDigits || onlyDigits === "-") return null;
   const n = Number(onlyDigits);
-  return Number.isFinite(n) ? n : null;
+  if (!Number.isFinite(n) || n === 0) return null;
+  return n;
 }
 
 function parseGantt(values: any[][]): {

@@ -27,7 +27,8 @@ export type ChartSolution = {
   label: string;
   socio: string;
   pymeTarget: number;
-  /** Acumulado mensual reportado (null en meses sin dato). */
+  /** Ingresos NUEVOS de cada mes (incremental, null en meses sin reporte).
+   *  El acumulado se calcula sumando los meses reportados. */
   monthly: (number | null)[];
 };
 
@@ -43,42 +44,36 @@ export function PymeProjectionChart({
   const todayMonth = today.getMonth(); // 0..11
 
   // Para cada solución calculamos:
-  //  - real[m]: acumulado reportado en el mes m (null si no hay)
-  //  - proj[m]: proyección lineal entre el último valor reportado (o 0) y la meta a Dic
+  //  - real[m]: acumulado a la fecha (suma de los meses reportados hasta m)
+  //  - proj[m]: proyección lineal entre el último acumulado reportado y la meta a Dic
   // En el chart usamos dos series por solución (`__real` y `__proj`) que se apilan.
   // En cada mes la solución contribuye con UNA de las dos (la otra es 0).
   function buildSeries(s: ChartSolution): { real: number[]; proj: number[] } {
     const real: number[] = Array(12).fill(0);
     const proj: number[] = Array(12).fill(0);
 
-    // Encuentra último mes con valor reportado
+    // `monthly` es incremental: vamos sumando para obtener el acumulado corrido.
+    // Un mes sin reporte (null) no suma pero arrastra el acumulado anterior.
+    const cum: number[] = Array(12).fill(0);
+    let running = 0;
     let lastReportedMonth = -1;
-    let lastReportedValue = 0;
     for (let m = 0; m < 12; m++) {
       if (s.monthly[m] != null) {
+        running += s.monthly[m] as number;
         lastReportedMonth = m;
-        lastReportedValue = s.monthly[m] as number;
       }
+      cum[m] = running;
     }
 
     for (let m = 0; m < 12; m++) {
-      const v = s.monthly[m];
-      if (v != null) {
-        real[m] = v;
-        continue;
-      }
-      // Sin dato: si está antes del último reportado, mantenemos el valor anterior
-      // (curva monotónica acumulada). Si está después, proyectamos linealmente
-      // entre lastReportedValue (mes lastReportedMonth) y meta (a Dic = mes 11).
-      if (m < lastReportedMonth) {
-        // Antes del primer reporte: 0
-        real[m] = 0;
-      } else if (m === lastReportedMonth) {
-        real[m] = lastReportedValue;
+      if (m <= lastReportedMonth) {
+        // Tramo reportado: acumulado real a ese mes.
+        real[m] = cum[m];
       } else {
-        // Proyección lineal hacia la meta
-        const startMonth = lastReportedMonth >= 0 ? lastReportedMonth : -1;
-        const startVal = lastReportedMonth >= 0 ? lastReportedValue : 0;
+        // Tramo futuro: proyección lineal entre el último acumulado reportado
+        // (mes lastReportedMonth, o 0 si nunca se reportó) y la meta a Dic.
+        const startMonth = lastReportedMonth;
+        const startVal = lastReportedMonth >= 0 ? cum[lastReportedMonth] : 0;
         const remainingMonths = 11 - startMonth;
         if (remainingMonths <= 0) {
           proj[m] = s.pymeTarget;
@@ -246,10 +241,10 @@ export function PymeProjectionChart({
       </div>
 
       <p className="mt-3 text-[11px] text-gray-400">
-        Real = acumulado mensual reportado en la pestaña{" "}
-        <span className="font-medium">KPIs_PYMEs</span> del Sheet (cliente actualiza al cierre de
-        cada mes). Proyección = trayectoria lineal entre el último mes reportado y la meta a
-        diciembre.
+        Real = acumulado a la fecha. El cliente escribe en la pestaña{" "}
+        <span className="font-medium">KPIs_PYMEs</span> el alta de cada mes (ingresos nuevos) y el
+        dashboard las suma. Proyección = trayectoria lineal entre el último mes reportado y la meta
+        a diciembre.
       </p>
     </div>
   );

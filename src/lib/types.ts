@@ -57,9 +57,12 @@ export type PymeKpis = {
   pymeNotas: string | null;
   pymeSharedGroup: string | null;
   pymeFuente: string | null;
-  /** Histórico mensual del acumulado, indexado por mes 0..11. `null` si no reportado. */
+  /** Ingresos NUEVOS de cada mes (incremental, no acumulado), indexado por mes
+   *  0..11. `null` si el mes no fue reportado. El cliente escribe el alta del
+   *  mes en cada celda; el acumulado se calcula sumando. */
   pymeMonthly: (number | null)[];
-  /** Último valor reportado (último mes no nulo); `null` si nunca se reportó. */
+  /** Acumulado a la fecha = suma de todos los meses reportados; `null` si nunca
+   *  se reportó. */
   pymeAcum: number | null;
   /** Mes (0..11) del último reporte, o -1 si no hay. */
   pymeAcumMonth: number;
